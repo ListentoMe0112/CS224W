@@ -1,4 +1,5 @@
 import torch_geometric
+
 print(torch_geometric.__version__)
 
 import torch
@@ -11,18 +12,30 @@ import torch_geometric.utils as pyg_utils
 
 from torch import Tensor
 from typing import Union, Tuple, Optional
-from torch_geometric.typing import (OptPairTensor, Adj, Size, NoneType,
-                                    OptTensor)
+from torch_geometric.typing import OptPairTensor, Adj, Size, NoneType, OptTensor
 
 from torch.nn import Parameter, Linear
 from torch_sparse import SparseTensor, set_diag
 from torch_geometric.nn.conv import MessagePassing
-from torch_geometric.utils import remove_self_loops, add_self_loops, softmax, degree, scatter
+from torch_geometric.utils import (
+    remove_self_loops,
+    add_self_loops,
+    softmax,
+    degree,
+    scatter,
+)
 
 class GAT(MessagePassing):
 
-    def __init__(self, in_channels, out_channels, heads = 2,
-                 negative_slope = 0.2, dropout = 0., **kwargs):
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        heads=2,
+        negative_slope=0.2,
+        dropout=0.0,
+        **kwargs
+    ):
         super(GAT, self).__init__(node_dim=0, **kwargs)
 
         self.in_channels = in_channels
@@ -52,10 +65,14 @@ class GAT(MessagePassing):
 
         ############################################################################
 
-        self.lin_l = nn.Linear(in_channels,  self.heads * out_channels, bias=True)
+        self.lin_l = nn.Linear(in_channels, self.heads * out_channels, bias=True)
         self.lin_r = nn.Linear(in_channels, self.heads * out_channels, bias=True)
-        self.att_l = nn.Parameter(torch.zeros(1, heads, self.out_channels ),requires_grad=True)
-        self.att_r = nn.Parameter(torch.zeros(1, heads, self.out_channels ),requires_grad=True)
+        self.att_l = nn.Parameter(
+            torch.zeros(1, heads, self.out_channels), requires_grad=True
+        )
+        self.att_r = nn.Parameter(
+            torch.zeros(1, heads, self.out_channels), requires_grad=True
+        )
 
         self.reset_parameters()
 
@@ -65,7 +82,7 @@ class GAT(MessagePassing):
         nn.init.xavier_uniform_(self.att_l)
         nn.init.xavier_uniform_(self.att_r)
 
-    def forward(self, x, edge_index, size = None):
+    def forward(self, x, edge_index, size=None):
 
         H, C = self.heads, self.out_channels
 
@@ -82,18 +99,16 @@ class GAT(MessagePassing):
         # 4. Transform the output back to the shape of [N, H * C].
         # Our implementation is ~5 lines, but don't worry if you deviate from this.
 
-
         ############################################################################
         x_l = self.lin_l(x).view(-1, H, C)
         x_r = self.lin_r(x).view(-1, H, C)
         alpha_l = (x_l * self.att_l).sum(dim=-1)
         alpha_r = (x_r * self.att_r).sum(dim=-1)
         alpha = (alpha_l, alpha_r)
-        out = self.propagate(edge_index, alpha = alpha, x=(x_l, x_r), size=size)
-        out = out.view(-1, H*C)
+        out = self.propagate(edge_index, alpha=alpha, x=(x_l, x_r), size=size)
+        out = out.view(-1, H * C)
 
         return out
-
 
     def message(self, x_j, alpha_j, alpha_i, index, ptr, size_i):
 
@@ -113,25 +128,27 @@ class GAT(MessagePassing):
         # 6. size_i: corresponds to the num_nodes variable input to the torch.geometric.softmax method
         # Our implementation is ~4-5 lines, but don't worry if you deviate from this.
 
-
         ############################################################################
         # Step 1: Calculate attention weights and apply LeakyReLU
         alpha = alpha_i + alpha_j  # Combine source and target attention scores
-        alpha = F.leaky_relu(alpha, negative_slope=self.negative_slope)  # Apply LeakyReLU
+        alpha = F.leaky_relu(
+            alpha, negative_slope=self.negative_slope
+        )  # Apply LeakyReLU
 
         # Step 2: Apply softmax over all neighbors (edge indices) for each node
-        alpha = softmax(alpha, index, num_nodes=size_i, ptr=ptr)  # Softmax for each node's neighbors
+        alpha = softmax(
+            alpha, index, num_nodes=size_i, ptr=ptr
+        )  # Softmax for each node's neighbors
 
         # Step 3: Apply dropout to attention weights
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
         # Step 4: Multiply embeddings with attention weights
-        out = x_j * alpha.unsqueeze(-1) # Apply attention weights to node embeddings
+        out = x_j * alpha.unsqueeze(-1)  # Apply attention weights to node embeddings
 
         return out
 
-
-    def aggregate(self, inputs, index, dim_size = None):
+    def aggregate(self, inputs, index, dim_size=None):
 
         ############################################################################
         # TODO: Your code here!
@@ -141,9 +158,12 @@ class GAT(MessagePassing):
         # Our implementation is ~1 lines, but don't worry if you deviate from this.
 
         ############################################################################
-        out = scatter(inputs, index, dim=0, dim_size=dim_size, reduce='sum')  # Sum aggregation
+        out = scatter(
+            inputs, index, dim=0, dim_size=dim_size, reduce="sum"
+        )  # Sum aggregation
 
         return out
+
 
 class GNNStack(torch.nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, args, emb=False):
@@ -151,14 +171,16 @@ class GNNStack(torch.nn.Module):
         conv_model = self.build_conv_model(args.model_type)
         self.convs = nn.ModuleList()
         self.convs.append(conv_model(input_dim, hidden_dim))
-        assert (args.num_layers >= 1), 'Number of layers is not >=1'
-        for l in range(args.num_layers-1):
+        assert args.num_layers >= 1, "Number of layers is not >=1"
+        for l in range(args.num_layers - 1):
             self.convs.append(conv_model(args.heads * hidden_dim, hidden_dim))
 
         # post-message-passing
         self.post_mp = nn.Sequential(
-            nn.Linear(args.heads * hidden_dim, hidden_dim), nn.Dropout(args.dropout),
-            nn.Linear(hidden_dim, output_dim))
+            nn.Linear(args.heads * hidden_dim, hidden_dim),
+            nn.Dropout(args.dropout),
+            nn.Linear(hidden_dim, output_dim),
+        )
 
         self.dropout = args.dropout
         self.num_layers = args.num_layers
@@ -166,9 +188,9 @@ class GNNStack(torch.nn.Module):
         self.emb = emb
 
     def build_conv_model(self, model_type):
-        if model_type == 'GraphSage':
+        if model_type == "GraphSage":
             return GraphSage
-        elif model_type == 'GAT':
+        elif model_type == "GAT":
             # When applying GAT with num heads > 1, you need to modify the
             # input and output dimension of the conv layers (self.convs),
             # to ensure that the input dim of the next layer is num heads
@@ -184,7 +206,7 @@ class GNNStack(torch.nn.Module):
         for i in range(self.num_layers):
             x = self.convs[i](x, edge_index)
             x = F.relu(x)
-            x = F.dropout(x, p=self.dropout,training=self.training)
+            x = F.dropout(x, p=self.dropout, training=self.training)
 
         x = self.post_mp(x)
 
@@ -196,25 +218,33 @@ class GNNStack(torch.nn.Module):
     def loss(self, pred, label):
         return F.nll_loss(pred, label)
 
+
 import torch.optim as optim
+
 
 def build_optimizer(args, params):
     weight_decay = args.weight_decay
-    filter_fn = filter(lambda p : p.requires_grad, params)
-    if args.opt == 'adam':
+    filter_fn = filter(lambda p: p.requires_grad, params)
+    if args.opt == "adam":
         optimizer = optim.Adam(filter_fn, lr=args.lr, weight_decay=weight_decay)
-    elif args.opt == 'sgd':
-        optimizer = optim.SGD(filter_fn, lr=args.lr, momentum=0.95, weight_decay=weight_decay)
-    elif args.opt == 'rmsprop':
+    elif args.opt == "sgd":
+        optimizer = optim.SGD(
+            filter_fn, lr=args.lr, momentum=0.95, weight_decay=weight_decay
+        )
+    elif args.opt == "rmsprop":
         optimizer = optim.RMSprop(filter_fn, lr=args.lr, weight_decay=weight_decay)
-    elif args.opt == 'adagrad':
+    elif args.opt == "adagrad":
         optimizer = optim.Adagrad(filter_fn, lr=args.lr, weight_decay=weight_decay)
-    if args.opt_scheduler == 'none':
+    if args.opt_scheduler == "none":
         return None, optimizer
-    elif args.opt_scheduler == 'step':
-        scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=args.opt_decay_step, gamma=args.opt_decay_rate)
-    elif args.opt_scheduler == 'cos':
-        scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.opt_restart)
+    elif args.opt_scheduler == "step":
+        scheduler = optim.lr_scheduler.StepLR(
+            optimizer, step_size=args.opt_decay_step, gamma=args.opt_decay_rate
+        )
+    elif args.opt_scheduler == "cos":
+        scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.opt_restart
+        )
     return scheduler, optimizer
 
 
@@ -239,13 +269,16 @@ import matplotlib.pyplot as plt
 
 def train(dataset, args):
 
-    print("Node task. test set size:", np.sum(dataset[0]['test_mask'].numpy()))
+    print("Node task. test set size:", np.sum(dataset[0]["test_mask"].numpy()))
     print()
-    test_loader = loader = DataLoader(dataset, batch_size=args.batch_size, shuffle=False)
+    test_loader = loader = DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=False
+    )
 
     # build model
-    model = GNNStack(dataset.num_node_features, args.hidden_dim, dataset.num_classes,
-                            args)
+    model = GNNStack(
+        dataset.num_node_features, args.hidden_dim, dataset.num_classes, args
+    )
     scheduler, opt = build_optimizer(args, model.parameters())
 
     # train
@@ -270,17 +303,20 @@ def train(dataset, args):
         losses.append(total_loss)
 
         if epoch % 10 == 0:
-          test_acc = test(test_loader, model)
-          test_accs.append(test_acc)
-          if test_acc > best_acc:
-            best_acc = test_acc
-            best_model = copy.deepcopy(model)
+            test_acc = test(test_loader, model)
+            test_accs.append(test_acc)
+            if test_acc > best_acc:
+                best_acc = test_acc
+                best_model = copy.deepcopy(model)
         else:
-          test_accs.append(test_accs[-1])
+            test_accs.append(test_accs[-1])
 
     return test_accs, losses, best_model, best_acc, test_loader
 
-def test(loader, test_model, is_validation=False, save_model_preds=False, model_type=None):
+
+def test(
+    loader, test_model, is_validation=False, save_model_preds=False, model_type=None
+):
     test_model.eval()
 
     correct = 0
@@ -297,15 +333,15 @@ def test(loader, test_model, is_validation=False, save_model_preds=False, model_
         label = label[mask]
 
         if save_model_preds:
-          print ("Saving Model Predictions for Model Type", model_type)
+            print("Saving Model Predictions for Model Type", model_type)
 
-          data = {}
-          data['pred'] = pred.view(-1).cpu().detach().numpy()
-          data['label'] = label.view(-1).cpu().detach().numpy()
+            data = {}
+            data["pred"] = pred.view(-1).cpu().detach().numpy()
+            data["label"] = label.view(-1).cpu().detach().numpy()
 
-          df = pd.DataFrame(data=data)
-          # Save locally as csv
-          df.to_csv('CORA-Node-' + model_type + '.csv', sep=',', index=False)
+            df = pd.DataFrame(data=data)
+            # Save locally as csv
+            df.to_csv("CORA-Node-" + model_type + ".csv", sep=",", index=False)
 
         correct += pred.eq(label).sum().item()
 
@@ -315,26 +351,42 @@ def test(loader, test_model, is_validation=False, save_model_preds=False, model_
 
     return correct / total
 
+
 class objectview(object):
     def __init__(self, d):
         self.__dict__ = d
 
+
 if __name__ == "__main__":
     for args in [
-        {'model_type': 'GAT', 'dataset': 'cora', 'num_layers': 2, 'heads': 1, 'batch_size': 32, 'hidden_dim': 32, 'dropout': 0.5, 'epochs': 500, 'opt': 'adam', 'opt_scheduler': 'none', 'opt_restart': 0, 'weight_decay': 5e-3, 'lr': 0.01},
+        {
+            "model_type": "GAT",
+            "dataset": "cora",
+            "num_layers": 2,
+            "heads": 1,
+            "batch_size": 32,
+            "hidden_dim": 32,
+            "dropout": 0.5,
+            "epochs": 500,
+            "opt": "adam",
+            "opt_scheduler": "none",
+            "opt_restart": 0,
+            "weight_decay": 5e-3,
+            "lr": 0.01,
+        },
     ]:
         args = objectview(args)
-        for model in ['GAT']:
+        for model in ["GAT"]:
             args.model_type = model
 
             # Match the dimension.
-            if model == 'GAT':
-              args.heads = 2
+            if model == "GAT":
+                args.heads = 2
             else:
-              args.heads = 1
+                args.heads = 1
 
-            if args.dataset == 'cora':
-                dataset = Planetoid(root='/tmp/cora', name='Cora')
+            if args.dataset == "cora":
+                dataset = Planetoid(root="/tmp/cora", name="Cora")
             else:
                 raise NotImplementedError("Unknown dataset")
             test_accs, losses, best_model, best_acc, test_loader = train(dataset, args)
@@ -343,7 +395,13 @@ if __name__ == "__main__":
             print("Minimum loss: {0}".format(min(losses)))
 
             # Run test for our best model to save the predictions!
-            test(test_loader, best_model, is_validation=False, save_model_preds=True, model_type=model)
+            test(
+                test_loader,
+                best_model,
+                is_validation=False,
+                save_model_preds=True,
+                model_type=model,
+            )
             print()
 
             plt.title(dataset.name)
